@@ -3,172 +3,209 @@ const NotificationEmail = require('../models/NotificationEmail');
 const sendEmail = require('./sendEmail');
 
 const runReminderCheck = async () => {
-  console.log('📧 [External Trigger] Running daily reminder check...');
+  console.log('📧 [Scheduler] Running daily reminder check...');
   const today = new Date();
   today.setHours(0, 0, 0, 0);
+  console.log(`📅 Today: ${today.toISOString()}`);
 
   try {
-    // 1. Items with unsent reminders
-    const itemsWithUnsentReminders = await Item.find({ 'reminders.sent': false })
+    // ─── 1. Fetch ALL items (active + expired) with at least one unsent reminder ───
+    const allItems = await Item.find({ 'reminders.sent': false })
       .populate('userId', 'email name')
       .populate('type', 'name')
       .populate('provider', 'name')
       .populate('company', 'name')
       .populate('location', 'name');
 
-    const userMap = new Map();
-    const includedItemIds = new Set();
+    console.log(`📦 Items with unsent reminders: ${allItems.length}`);
 
-    for (const item of itemsWithUnsentReminders) {
+    if (allItems.length === 0) {
+      console.log('⚠️  No unsent reminders found. All reminder flags may already be sent=true.');
+      console.log('💡 Tip: Reset flags in MongoDB Atlas with:');
+      console.log('   db.items.updateMany({}, { $set: { "reminders.$[].sent": false } })');
+      return;
+    }
+
+    // ─── 2. Group items by user, decide which ones to notify today ───
+    const userMap = new Map(); // userId → { owner, items[] }
+
+    for (const item of allItems) {
       const end = new Date(item.endDate);
       end.setHours(0, 0, 0, 0);
       const diffDays = Math.ceil((end - today) / (1000 * 60 * 60 * 24));
 
-      let matchingReminder = null;
-      if (diffDays > 0) {
-        matchingReminder = item.reminders.find(r => !r.sent && r.daysBefore === diffDays);
-      } else {
-        matchingReminder = item.reminders.find(r => !r.sent);
-      }
+      console.log(`\n🔍 "${item.name}" | ends: ${end.toDateString()} | diffDays: ${diffDays}`);
+      console.log(`   Reminders: [${item.reminders.map(r => `${r.daysBefore}d(sent=${r.sent})`).join(', ')}]`);
 
-      if (!matchingReminder) continue;
+      let shouldNotify = false;
 
       if (diffDays <= 0) {
-        item.reminders.forEach(r => { if (!r.sent) r.sent = true; });
+        // ── Expired: notify if ANY reminder is still unsent ──
+        shouldNotify = item.reminders.some(r => !r.sent);
+        if (shouldNotify) {
+          // Mark ALL unsent reminders as sent
+          item.reminders.forEach(r => { if (!r.sent) r.sent = true; });
+          console.log(`   ✅ Expired item — marking all reminders sent`);
+        }
       } else {
-        matchingReminder.sent = true;
+        // ── Not expired: notify if diffDays <= the highest unsent daysBefore ──
+        // This catches missed days too (e.g. cron was down on day 30, fires on day 28)
+        const unsentReminders = item.reminders.filter(r => !r.sent);
+        const triggerReminder = unsentReminders.find(r => diffDays <= r.daysBefore);
+
+        if (triggerReminder) {
+          shouldNotify = true;
+          triggerReminder.sent = true;
+          console.log(`   ✅ Triggering reminder: ${triggerReminder.daysBefore}d (diffDays=${diffDays})`);
+        } else {
+          console.log(`   ⏭️  No reminder due today (diffDays=${diffDays} not within any threshold)`);
+        }
       }
+
+      if (!shouldNotify) continue;
 
       const userId = item.userId._id.toString();
       if (!userMap.has(userId)) {
-        userMap.set(userId, {
-          owner: item.userId,
-          items: [],
-          includedIds: new Set(),
-        });
+        userMap.set(userId, { owner: item.userId, items: [] });
       }
       userMap.get(userId).items.push(item);
-      userMap.get(userId).includedIds.add(item._id.toString());
-      includedItemIds.add(item._id.toString());
     }
 
-    // 2. Add all expired items that were not already caught
-    const expiredItems = await Item.find({
-      endDate: { $lt: today },
-      _id: { $nin: Array.from(includedItemIds) }
-    })
-      .populate('userId', 'email name')
-      .populate('type', 'name')
-      .populate('provider', 'name')
-      .populate('company', 'name')
-      .populate('location', 'name');
+    console.log(`\n👥 Users to notify: ${userMap.size}`);
 
-    for (const item of expiredItems) {
-      const userId = item.userId._id.toString();
-      if (!userMap.has(userId)) {
-        userMap.set(userId, {
-          owner: item.userId,
-          items: [],
-          includedIds: new Set(),
-        });
-      }
-      if (!userMap.get(userId).includedIds.has(item._id.toString())) {
-        userMap.get(userId).items.push(item);
-        userMap.get(userId).includedIds.add(item._id.toString());
-      }
+    if (userMap.size === 0) {
+      console.log('⚠️  No users qualify for notification today.');
+      return;
     }
 
-    // 3. Send one email per user
-    for (const [userId, data] of userMap) {
-      const { owner, items } = data;
-      if (!owner.email) {
-        console.warn(`⚠️ User ${userId} has no email – skipping.`);
+    // ─── 3. Send one digest email per user ───
+    for (const [userId, { owner, items }] of userMap) {
+      if (!owner?.email) {
+        console.warn(`⚠️  User ${userId} has no email — skipping.`);
         continue;
       }
-      const ownerEmail = owner.email;
-      const extraEmails = await NotificationEmail.find({ userId });
-      const allRecipients = [ownerEmail, ...extraEmails.map(e => e.email)].filter(Boolean);
 
+      // Sort by soonest expiry first
       items.sort((a, b) => new Date(a.endDate) - new Date(b.endDate));
 
+      // Get extra notification emails
+      const extraEmails = await NotificationEmail.find({ userId });
+      const allRecipients = [owner.email, ...extraEmails.map(e => e.email)].filter(Boolean);
+      console.log(`\n📨 User: ${owner.email} | Items: ${items.length} | Recipients: ${allRecipients.join(', ')}`);
+
+      // ─── Build email HTML ───
       const tableRows = items.map(item => {
         const end = new Date(item.endDate);
-        const now = new Date();
-        const diffDays = Math.ceil((end - now) / (1000 * 60 * 60 * 24));
-        const status =
-          diffDays <= 0
-            ? `<span style="color:#e11d48;font-weight:bold;">Expired</span>`
-            : diffDays <= 7
-            ? `<span style="color:#f59e0b;font-weight:bold;">${diffDays} day${diffDays !== 1 ? 's' : ''}</span>`
-            : `<span style="color:#10b981;font-weight:bold;">${diffDays} day${diffDays !== 1 ? 's' : ''}</span>`;
+        const diffDays = Math.ceil((end - new Date()) / (1000 * 60 * 60 * 24));
+        const statusColor = diffDays <= 0 ? '#e11d48' : diffDays <= 7 ? '#f59e0b' : '#10b981';
+        const statusText = diffDays <= 0 ? 'Expired' : `${diffDays} day${diffDays !== 1 ? 's' : ''}`;
         return `
           <tr>
-            <td style="padding:8px 10px;border-bottom:1px solid #e5e7eb;">${item.name}</td>
-            <td style="padding:8px 10px;border-bottom:1px solid #e5e7eb;">${item.type?.name || '—'}</td>
-            <td style="padding:8px 10px;border-bottom:1px solid #e5e7eb;">${item.provider?.name || '—'}</td>
-            <td style="padding:8px 10px;border-bottom:1px solid #e5e7eb;">${item.company?.name || '—'}</td>
-            <td style="padding:8px 10px;border-bottom:1px solid #e5e7eb;">${item.location?.name || '—'}</td>
-            <td style="padding:8px 10px;border-bottom:1px solid #e5e7eb;">${end.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}</td>
-            <td style="padding:8px 10px;border-bottom:1px solid #e5e7eb;">${status}</td>
-          </tr>
-        `;
+            <td style="padding:10px 12px;border-bottom:1px solid #e5e7eb;color:#111827;">${item.name}</td>
+            <td style="padding:10px 12px;border-bottom:1px solid #e5e7eb;color:#6b7280;">${item.type?.name || '—'}</td>
+            <td style="padding:10px 12px;border-bottom:1px solid #e5e7eb;color:#6b7280;">${item.provider?.name || '—'}</td>
+            <td style="padding:10px 12px;border-bottom:1px solid #e5e7eb;color:#6b7280;">${item.company?.name || '—'}</td>
+            <td style="padding:10px 12px;border-bottom:1px solid #e5e7eb;color:#6b7280;">${item.location?.name || '—'}</td>
+            <td style="padding:10px 12px;border-bottom:1px solid #e5e7eb;color:#374151;">
+              ${end.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}
+            </td>
+            <td style="padding:10px 12px;border-bottom:1px solid #e5e7eb;">
+              <span style="color:${statusColor};font-weight:bold;">${statusText}</span>
+            </td>
+          </tr>`;
       }).join('');
 
-      const hasExpired = items.some(item => new Date(item.endDate) < new Date());
-      const subject = `⏰ AMC Manager – ${items.length} item${items.length !== 1 ? 's' : ''} require attention`;
-      const html = `
-        <div style="font-family:Arial,Helvetica,sans-serif;max-width:700px;margin:0 auto;background:#ffffff;border:1px solid #e5e7eb;border-radius:12px;overflow:hidden;">
-          <div style="background:#4f46e5;padding:20px 30px;text-align:center;">
-            <h2 style="color:#ffffff;margin:0;font-size:20px;">AMC Manager</h2>
-            <p style="color:#c7d2fe;margin:5px 0 0;font-size:14px;">Renewal Reminder</p>
-          </div>
-          <div style="padding:30px;">
-            <p style="font-size:16px;color:#1f2937;">Hi <strong>${owner.name}</strong>,</p>
-            <p style="font-size:14px;color:#4b5563;">
-              The following ${hasExpired ? 'items have expired or are' : 'items are'} about to expire. Please review and take action to avoid service interruption.
-            </p>
-            <table style="width:100%;border-collapse:collapse;margin:20px 0;font-size:13px;">
-              <thead>
-                <tr style="background:#f3f4f6;">
-                  <th style="text-align:left;padding:8px 10px;">Item</th>
-                  <th style="text-align:left;padding:8px 10px;">Type</th>
-                  <th style="text-align:left;padding:8px 10px;">Provider</th>
-                  <th style="text-align:left;padding:8px 10px;">Company</th>
-                  <th style="text-align:left;padding:8px 10px;">Location</th>
-                  <th style="text-align:left;padding:8px 10px;">Expires</th>
-                  <th style="text-align:left;padding:8px 10px;">Status</th>
-                </tr>
-              </thead>
-              <tbody>
-                ${tableRows}
-              </tbody>
-            </table>
-            <p style="font-size:13px;color:#6b7280;margin-top:20px;">
-              Log in to <a href="https://amc-manager-self.vercel.app/" style="color:#4f46e5;text-decoration:none;">AMC Manager</a> to renew or update these items.
-            </p>
-          </div>
-          <div style="background:#f9fafb;padding:15px 30px;text-align:center;font-size:11px;color:#9ca3af;">
-            This is an automated email from AMC Manager. Please do not reply directly.
-          </div>
-        </div>
-      `;
+      const hasExpired = items.some(i => new Date(i.endDate) < new Date());
+      const subject = `⏰ AMC Manager – ${items.length} item${items.length !== 1 ? 's' : ''} require${items.length === 1 ? 's' : ''} attention`;
 
+      const html = `
+        <!DOCTYPE html>
+        <html>
+        <head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
+        <body style="margin:0;padding:20px;background:#f3f4f6;font-family:Arial,Helvetica,sans-serif;">
+          <div style="max-width:720px;margin:0 auto;background:#ffffff;border-radius:12px;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,0.08);">
+
+            <!-- Header -->
+            <div style="background:linear-gradient(135deg,#4f46e5,#7c3aed);padding:28px 32px;text-align:center;">
+              <h1 style="color:#ffffff;margin:0;font-size:22px;letter-spacing:0.5px;">🔔 AMC Manager</h1>
+              <p style="color:#c7d2fe;margin:6px 0 0;font-size:14px;">Renewal Reminder Notification</p>
+            </div>
+
+            <!-- Body -->
+            <div style="padding:32px;">
+              <p style="font-size:16px;color:#1f2937;margin-top:0;">
+                Hi <strong>${owner.name}</strong>,
+              </p>
+              <p style="font-size:14px;color:#4b5563;line-height:1.6;">
+                ${hasExpired
+                  ? 'Some of your AMC/contract items have <strong style="color:#e11d48;">expired</strong> or are <strong>expiring soon</strong>.'
+                  : 'The following AMC/contract items are <strong>expiring soon</strong>.'}
+                Please review and renew them to avoid service interruption.
+              </p>
+
+              <!-- Table -->
+              <div style="overflow-x:auto;margin:24px 0;">
+                <table style="width:100%;border-collapse:collapse;font-size:13px;min-width:560px;">
+                  <thead>
+                    <tr style="background:#f9fafb;">
+                      <th style="text-align:left;padding:10px 12px;color:#374151;border-bottom:2px solid #e5e7eb;white-space:nowrap;">Item</th>
+                      <th style="text-align:left;padding:10px 12px;color:#374151;border-bottom:2px solid #e5e7eb;white-space:nowrap;">Type</th>
+                      <th style="text-align:left;padding:10px 12px;color:#374151;border-bottom:2px solid #e5e7eb;white-space:nowrap;">Provider</th>
+                      <th style="text-align:left;padding:10px 12px;color:#374151;border-bottom:2px solid #e5e7eb;white-space:nowrap;">Company</th>
+                      <th style="text-align:left;padding:10px 12px;color:#374151;border-bottom:2px solid #e5e7eb;white-space:nowrap;">Location</th>
+                      <th style="text-align:left;padding:10px 12px;color:#374151;border-bottom:2px solid #e5e7eb;white-space:nowrap;">Expires</th>
+                      <th style="text-align:left;padding:10px 12px;color:#374151;border-bottom:2px solid #e5e7eb;white-space:nowrap;">Status</th>
+                    </tr>
+                  </thead>
+                  <tbody>${tableRows}</tbody>
+                </table>
+              </div>
+
+              <!-- CTA -->
+              <div style="text-align:center;margin:28px 0 8px;">
+                <a href="${process.env.FRONTEND_URL || 'https://amc-manager.onrender.com'}"
+                   style="background:#4f46e5;color:#ffffff;padding:12px 28px;border-radius:8px;text-decoration:none;font-size:14px;font-weight:bold;display:inline-block;">
+                  Open AMC Manager →
+                </a>
+              </div>
+            </div>
+
+            <!-- Footer -->
+            <div style="background:#f9fafb;padding:16px 32px;text-align:center;border-top:1px solid #e5e7eb;">
+              <p style="font-size:11px;color:#9ca3af;margin:0;">
+                This is an automated email from AMC Manager. Please do not reply directly.<br>
+                You received this because you or your admin added this address for AMC alerts.
+              </p>
+            </div>
+          </div>
+        </body>
+        </html>`;
+
+      // ─── Send to all recipients ───
       for (const to of allRecipients) {
-        await sendEmail(to, subject, html);
+        try {
+          await sendEmail(to, subject, html);
+          console.log(`   ✅ Email sent → ${to}`);
+        } catch (emailErr) {
+          console.error(`   ❌ Failed → ${to}:`, emailErr.message);
+        }
       }
 
-      // Save reminder sent flags
+      // ─── Save updated reminder flags ───
       for (const item of items) {
-        if (item.reminders && item.reminders.some(r => r.sent === true)) {
+        try {
           await item.save();
+          console.log(`   💾 Saved: ${item.name}`);
+        } catch (saveErr) {
+          console.error(`   ❌ Save failed for ${item.name}:`, saveErr.message);
         }
       }
     }
 
-    console.log(`✅ Reminder check complete – ${userMap.size} user(s) notified.`);
+    console.log(`\n✅ Reminder check complete — ${userMap.size} user(s) notified.`);
   } catch (err) {
-    console.error('❌ Error during reminder check:', err);
-    throw err;  // rethrow so the calling route can respond with 500
+    console.error('❌ Fatal error during reminder check:', err);
+    throw err;
   }
 };
 
