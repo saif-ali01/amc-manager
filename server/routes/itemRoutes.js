@@ -155,4 +155,18 @@ router.post('/:id/test-reminder', auth, async (req, res) => {
   }
 });
 
+// POST /api/items/run-reminders  (called by external cron)
+router.post('/run-reminders', async (req, res) => {
+  try {
+    if (req.body.secret !== process.env.CRON_SECRET) {
+      return res.status(401).json({ message: 'Unauthorized' });
+    }
+    const { runReminderCheck } = require('../utils/scheduler');
+    await runReminderCheck();
+    res.json({ message: 'Reminder check complete' });
+  } catch (err) {
+    console.error('Manual reminder error:', err);
+    res.status(500).json({ message: err.message });
+  }
+});
 module.exports = router;
