@@ -1,12 +1,11 @@
- const express = require('express');
+const express = require('express');
 const router = express.Router();
 const Item = require('../models/Item');
 const auth = require('../middleware/auth');
 const NotificationEmail = require('../models/NotificationEmail');
 const sendEmail = require('../utils/sendEmail');
-const { runReminderCheck } = require('../utils/scheduler');   // ✅ imported once at the top
+const { runReminderCheck } = require('../utils/scheduler');
 
-// Helper: populate all reference fields
 const populateFields = [
   { path: 'type', select: 'name' },
   { path: 'provider', select: 'name' },
@@ -14,7 +13,7 @@ const populateFields = [
   { path: 'location', select: 'name' },
 ];
 
-// POST /api/items – Create a new item
+// POST /api/items
 router.post('/', auth, async (req, res) => {
   try {
     const { name, type, startDate, endDate, reminders, ...rest } = req.body;
@@ -32,7 +31,6 @@ router.post('/', auth, async (req, res) => {
       ...rest
     });
     await item.save();
-
     const populatedItem = await Item.findById(item._id).populate(populateFields);
     res.status(201).json(populatedItem);
   } catch (err) {
@@ -40,13 +38,12 @@ router.post('/', auth, async (req, res) => {
   }
 });
 
-// GET /api/items – Get all items for the logged-in user
+// GET /api/items
 router.get('/', auth, async (req, res) => {
   try {
     const items = await Item.find({ userId: req.userId })
       .populate(populateFields)
       .sort({ endDate: 1 });
-
     const now = new Date();
     const enriched = items.map(item => {
       let status = 'Active';
@@ -54,14 +51,13 @@ router.get('/', auth, async (req, res) => {
       else if ((item.endDate - now) / (1000 * 60 * 60 * 24) <= 30) status = 'Expiring';
       return { ...item._doc, status };
     });
-
     res.json(enriched);
   } catch (err) {
     res.status(500).json({ message: err.message });
   }
 });
 
-// PUT /api/items/:id – Update an item
+// PUT /api/items/:id
 router.put('/:id', auth, async (req, res) => {
   try {
     const item = await Item.findOneAndUpdate(
@@ -69,7 +65,6 @@ router.put('/:id', auth, async (req, res) => {
       req.body,
       { new: true }
     ).populate(populateFields);
-
     if (!item) return res.status(404).json({ message: 'Item not found' });
     res.json(item);
   } catch (err) {
@@ -77,7 +72,7 @@ router.put('/:id', auth, async (req, res) => {
   }
 });
 
-// DELETE /api/items/:id – Delete an item
+// DELETE /api/items/:id
 router.delete('/:id', auth, async (req, res) => {
   try {
     const item = await Item.findOneAndDelete({ _id: req.params.id, userId: req.userId });
@@ -88,20 +83,17 @@ router.delete('/:id', auth, async (req, res) => {
   }
 });
 
-// POST /api/items/test-reminders – test all unsent reminders for the logged-in user
+// POST /api/items/test-reminders
 router.post('/test-reminders', auth, async (req, res) => {
   const today = new Date();
   today.setHours(0, 0, 0, 0);
-
   const items = await Item.find({ userId: req.userId, 'reminders.sent': false })
     .populate('userId', 'email name');
-
   let sent = 0;
   for (let item of items) {
     const end = new Date(item.endDate);
     end.setHours(0, 0, 0, 0);
     const diffDays = Math.ceil((end - today) / (1000 * 60 * 60 * 24));
-
     for (let reminder of item.reminders) {
       if (!reminder.sent && reminder.daysBefore === diffDays) {
         await sendEmail(item.userId.email, `Reminder: ${item.name}`, `Expires in ${diffDays} days`);
@@ -114,27 +106,23 @@ router.post('/test-reminders', auth, async (req, res) => {
   res.json({ message: `Sent ${sent} reminder(s)` });
 });
 
-// POST /api/items/:id/test-reminder – test a single item's reminder to owner + extra emails
+// POST /api/items/:id/test-reminder
 router.post('/:id/test-reminder', auth, async (req, res) => {
   try {
     const item = await Item.findOne({ _id: req.params.id, userId: req.userId })
       .populate('userId', 'email name')
       .populate('type', 'name');
-
     if (!item.userId || !item.userId.email) {
       return res.status(400).json({ message: 'Item owner email not found' });
     }
-
     const today = new Date();
     today.setHours(0, 0, 0, 0);
     const end = new Date(item.endDate);
     end.setHours(0, 0, 0, 0);
     const diffDays = Math.ceil((end - today) / (1000 * 60 * 60 * 24));
-
     const ownerEmail = item.userId.email;
     const extraEmails = await NotificationEmail.find({ userId: req.userId });
     const allRecipients = [ownerEmail, ...extraEmails.map((e) => e.email)].filter(Boolean);
-
     const subject = `🔔 Test Reminder – ${item.name} expires in ${diffDays} days`;
     const html = `
       <h2>Test Reminder</h2>
@@ -144,11 +132,9 @@ router.post('/:id/test-reminder', auth, async (req, res) => {
       <hr>
       <p><small>Sent by AMC Manager</small></p>
     `;
-
     for (const to of allRecipients) {
       await sendEmail(to, subject, html);
     }
-
     res.json({ message: `Test reminder sent to ${allRecipients.length} recipient(s)`, recipients: allRecipients });
   } catch (err) {
     console.error('Test reminder error:', err);
@@ -162,8 +148,6 @@ router.post('/run-reminders', async (req, res) => {
     if (req.body.secret !== process.env.CRON_SECRET) {
       return res.status(401).json({ message: 'Unauthorized' });
     }
-
-    // ✅ Now using the imported runReminderCheck
     await runReminderCheck();
     res.json({ message: 'Reminder check complete' });
   } catch (err) {
