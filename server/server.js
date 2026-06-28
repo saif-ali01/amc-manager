@@ -12,8 +12,8 @@ const companyRoutes = require('./routes/companyRoutes');
 const locationRoutes = require('./routes/locationRoutes');
 const notificationEmailRoutes = require('./routes/notificationEmailRoutes');
 
-// Import scheduler (make sure the file exists)
-const { startScheduler } = require('./utils/scheduler');
+// ❌ No scheduler import needed any more
+// const { startScheduler } = require('./utils/scheduler');
 
 const app = express();
 
@@ -34,7 +34,10 @@ app.use('/api/notification-emails', notificationEmailRoutes);
 mongoose.connect(process.env.MONGO_URI)
   .then(() => {
     console.log('MongoDB connected');
-    app.listen(5000, () => console.log('Server running on port 5000'));
-    startScheduler();   // Start the daily email job (if you have it)
+    const PORT = process.env.PORT || 5000;
+    app.listen(PORT, () => {
+      console.log(`Server running on port ${PORT}`);
+      console.log('ℹ️  Reminders are triggered externally via POST /api/items/run-reminders');
+    });
   })
   .catch(err => console.log('MongoDB connection error:', err));

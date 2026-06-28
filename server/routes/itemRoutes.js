@@ -158,6 +158,8 @@ router.post('/:id/test-reminder', auth, async (req, res) => {
 // POST /api/items/run-reminders  (called by external cron)
 router.post('/run-reminders', async (req, res) => {
   try {
+      console.log('Secret received:', req.body.secret);
+  console.log('Secret expected:', process.env.CRON_SECRET);
     if (req.body.secret !== process.env.CRON_SECRET) {
       return res.status(401).json({ message: 'Unauthorized' });
     }
