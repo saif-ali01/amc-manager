@@ -23,6 +23,9 @@ app.use('/api/vendors', vendorRoutes);
 app.use('/api/companies', companyRoutes);
 app.use('/api/locations', locationRoutes);
 app.use('/api/notification-emails', notificationEmailRoutes);
+app.get('/api/health', (req, res) => {
+  res.json({ status: 'ok' });
+});
 
 mongoose.connect(process.env.MONGO_URI)
   .then(() => {
