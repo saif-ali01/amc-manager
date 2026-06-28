@@ -1,9 +1,10 @@
-const express = require('express');
+ const express = require('express');
 const router = express.Router();
 const Item = require('../models/Item');
 const auth = require('../middleware/auth');
 const NotificationEmail = require('../models/NotificationEmail');
 const sendEmail = require('../utils/sendEmail');
+const { runReminderCheck } = require('../utils/scheduler');   // ✅ imported once at the top
 
 // Helper: populate all reference fields
 const populateFields = [
@@ -32,7 +33,6 @@ router.post('/', auth, async (req, res) => {
     });
     await item.save();
 
-    // Return the newly created item with populated fields
     const populatedItem = await Item.findById(item._id).populate(populateFields);
     res.status(201).json(populatedItem);
   } catch (err) {
@@ -87,6 +87,8 @@ router.delete('/:id', auth, async (req, res) => {
     res.status(500).json({ message: err.message });
   }
 });
+
+// POST /api/items/test-reminders – test all unsent reminders for the logged-in user
 router.post('/test-reminders', auth, async (req, res) => {
   const today = new Date();
   today.setHours(0, 0, 0, 0);
@@ -112,7 +114,7 @@ router.post('/test-reminders', auth, async (req, res) => {
   res.json({ message: `Sent ${sent} reminder(s)` });
 });
 
-// POST /api/items/:id/test-reminder
+// POST /api/items/:id/test-reminder – test a single item's reminder to owner + extra emails
 router.post('/:id/test-reminder', auth, async (req, res) => {
   try {
     const item = await Item.findOne({ _id: req.params.id, userId: req.userId })
@@ -120,15 +122,15 @@ router.post('/:id/test-reminder', auth, async (req, res) => {
       .populate('type', 'name');
 
     if (!item.userId || !item.userId.email) {
-  return res.status(400).json({ message: 'Item owner email not found' });
-}
+      return res.status(400).json({ message: 'Item owner email not found' });
+    }
+
     const today = new Date();
     today.setHours(0, 0, 0, 0);
     const end = new Date(item.endDate);
     end.setHours(0, 0, 0, 0);
     const diffDays = Math.ceil((end - today) / (1000 * 60 * 60 * 24));
 
-    // Collect all recipients
     const ownerEmail = item.userId.email;
     const extraEmails = await NotificationEmail.find({ userId: req.userId });
     const allRecipients = [ownerEmail, ...extraEmails.map((e) => e.email)].filter(Boolean);
@@ -143,7 +145,6 @@ router.post('/:id/test-reminder', auth, async (req, res) => {
       <p><small>Sent by AMC Manager</small></p>
     `;
 
-    // Send to all recipients
     for (const to of allRecipients) {
       await sendEmail(to, subject, html);
     }
@@ -158,12 +159,11 @@ router.post('/:id/test-reminder', auth, async (req, res) => {
 // POST /api/items/run-reminders  (called by external cron)
 router.post('/run-reminders', async (req, res) => {
   try {
-      console.log('Secret received:', req.body.secret);
-  console.log('Secret expected:', process.env.CRON_SECRET);
     if (req.body.secret !== process.env.CRON_SECRET) {
       return res.status(401).json({ message: 'Unauthorized' });
     }
-    const { runReminderCheck } = require('../utils/scheduler');
+
+    // ✅ Now using the imported runReminderCheck
     await runReminderCheck();
     res.json({ message: 'Reminder check complete' });
   } catch (err) {
@@ -171,4 +171,5 @@ router.post('/run-reminders', async (req, res) => {
     res.status(500).json({ message: err.message });
   }
 });
+
 module.exports = router;
