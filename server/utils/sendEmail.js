@@ -1,12 +1,10 @@
 const { Resend } = require('resend');
-
 const resend = new Resend(process.env.RESEND_API_KEY);
 
 module.exports = async (to, subject, html) => {
   try {
     const { data, error } = await resend.emails.send({
-      // ✅ Use the Resend account email – it’s already authorized
-      from: 'AMC Manager <noreply@amcmanager.tk>',
+      from: 'AMC Manager <onboarding@resend.dev>', // ← Resend's verified sender
       to,
       subject,
       html,
