@@ -141,15 +141,21 @@ router.post('/:id/test-reminder', auth, async (req, res) => {
     res.status(500).json({ message: err.message });
   }
 });
-
 // POST /api/items/run-reminders  (called by external cron)
 router.post('/run-reminders', async (req, res) => {
   try {
     if (req.body.secret !== process.env.CRON_SECRET) {
       return res.status(401).json({ message: 'Unauthorized' });
     }
-    await runReminderCheck();
-    res.json({ message: 'Reminder check complete' });
+
+    // ✅ Respond immediately so cron-job.org doesn't timeout
+    res.json({ message: 'Reminder check started' });
+
+    // ✅ Process in background after response is sent
+    runReminderCheck().catch(err => {
+      console.error('Background reminder error:', err);
+    });
+
   } catch (err) {
     console.error('Manual reminder error:', err);
     res.status(500).json({ message: err.message });
