@@ -1,24 +1,25 @@
-const nodemailer = require('nodemailer');
+const { Resend } = require('resend');
 
-const transporter = nodemailer.createTransport({
-  service: 'gmail',
-  auth: {
-    user: process.env.EMAIL_USER,
-    pass: process.env.EMAIL_PASS,   // Must be a Gmail App Password
-  },
-});
+// Initialize Resend with your API key
+const resend = new Resend(process.env.RESEND_API_KEY);
 
 module.exports = async (to, subject, html) => {
   try {
-    const info = await transporter.sendMail({
-      from: process.env.EMAIL_USER,
+    const { data, error } = await resend.emails.send({
+      from: 'AMC Manager <onboarding@resend.dev>',  // default sender – you can change later after domain verification
       to,
       subject,
       html,
     });
-    console.log(`✅ Email sent to ${to}: ${info.messageId}`);
-  } catch (error) {
-    console.error(`❌ Failed to send email to ${to}:`, error.message);
-    throw error;  // Let the caller handle the error appropriately
+
+    if (error) {
+      console.error(`❌ Failed to send email to ${to}:`, error.message);
+      throw error;
+    }
+
+    console.log(`✅ Email sent to ${to}: ${data?.id}`);
+  } catch (err) {
+    console.error(`❌ Failed to send email to ${to}:`, err.message);
+    throw err;
   }
 };
