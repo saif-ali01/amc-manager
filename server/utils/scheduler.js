@@ -144,7 +144,7 @@ const runReminderCheck = async () => {
               </tbody>
             </table>
             <p style="font-size:13px;color:#6b7280;margin-top:20px;">
-              Log in to <a href="http://localhost:5173" style="color:#4f46e5;text-decoration:none;">AMC Manager</a> to renew or update these items.
+              Log in to <a href="https://amc-manager-self.vercel.app/" style="color:#4f46e5;text-decoration:none;">AMC Manager</a> to renew or update these items.
             </p>
           </div>
           <div style="background:#f9fafb;padding:15px 30px;text-align:center;font-size:11px;color:#9ca3af;">

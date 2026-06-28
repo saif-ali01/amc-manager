@@ -6,7 +6,7 @@ module.exports = async (to, subject, html) => {
   try {
     const { data, error } = await resend.emails.send({
       // ✅ Use the Resend account email – it’s already authorized
-      from: 'AMC Manager <ali786saif0@gmail.com>',
+      from: 'AMC Manager <noreply@amcmanager.tk>',
       to,
       subject,
       html,
