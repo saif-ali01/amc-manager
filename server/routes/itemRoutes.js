@@ -1,5 +1,8 @@
 const express = require('express');
 const router = express.Router();
+const multer = require('multer');
+const csvtojson = require('csvtojson');
+const XLSX = require('xlsx');
 const Item = require('../models/Item');
 const auth = require('../middleware/auth');
 const NotificationEmail = require('../models/NotificationEmail');
@@ -13,7 +16,10 @@ const populateFields = [
   { path: 'location', select: 'name' },
 ];
 
-// ─── POST /api/items ───────────────────────────────────────────────────────────
+// Configure multer – store file in memory (for import)
+const upload = multer({ storage: multer.memoryStorage() });
+
+// ─── POST /api/items (Create) ─────────────────────────────────────────────────
 router.post('/', auth, async (req, res) => {
   try {
     const { name, type, startDate, endDate, reminders, ...rest } = req.body;
@@ -23,7 +29,6 @@ router.post('/', auth, async (req, res) => {
       type,
       startDate,
       endDate,
-      // Default reminders: 30, 15, 7 days before — all unsent
       reminders: reminders?.length
         ? reminders.map(r => ({ daysBefore: r.daysBefore, sent: false }))
         : [{ daysBefore: 30, sent: false }, { daysBefore: 15, sent: false }, { daysBefore: 7, sent: false }],
@@ -37,7 +42,7 @@ router.post('/', auth, async (req, res) => {
   }
 });
 
-// ─── GET /api/items ────────────────────────────────────────────────────────────
+// ─── GET /api/items (List all for user) ───────────────────────────────────────
 router.get('/', auth, async (req, res) => {
   try {
     const items = await Item.find({ userId: req.userId })
@@ -59,22 +64,19 @@ router.get('/', auth, async (req, res) => {
   }
 });
 
-// ─── PUT /api/items/:id ────────────────────────────────────────────────────────
+// ─── PUT /api/items/:id (Update) ──────────────────────────────────────────────
 router.put('/:id', auth, async (req, res) => {
   try {
-    // ✅ If endDate changes, reset all reminder flags so new alerts fire
     if (req.body.endDate) {
       const existing = await Item.findOne({ _id: req.params.id, userId: req.userId });
       if (existing) {
         const oldEnd = new Date(existing.endDate).toDateString();
         const newEnd = new Date(req.body.endDate).toDateString();
         if (oldEnd !== newEnd) {
-          // Reset reminders — keep daysBefore values, clear sent flags
           req.body.reminders = existing.reminders.map(r => ({
             daysBefore: r.daysBefore,
             sent: false,
           }));
-          // If custom reminders sent in body, use those instead
           if (req.body.reminders?.length === 0) {
             req.body.reminders = [
               { daysBefore: 30, sent: false },
@@ -99,7 +101,7 @@ router.put('/:id', auth, async (req, res) => {
   }
 });
 
-// ─── DELETE /api/items/:id ─────────────────────────────────────────────────────
+// ─── DELETE /api/items/:id (Single delete) ───────────────────────────────────
 router.delete('/:id', auth, async (req, res) => {
   try {
     const item = await Item.findOneAndDelete({ _id: req.params.id, userId: req.userId });
@@ -110,8 +112,137 @@ router.delete('/:id', auth, async (req, res) => {
   }
 });
 
-// ─── POST /api/items/:id/test-reminder ────────────────────────────────────────
-// Manually send a test reminder for a single item
+// ─── DELETE /api/items/bulk (Bulk delete) ─────────────────────────────────────
+router.delete('/bulk', auth, async (req, res) => {
+  try {
+    const { ids } = req.body; // array of item IDs
+    if (!ids || !Array.isArray(ids) || ids.length === 0) {
+      return res.status(400).json({ message: 'Provide an array of item IDs.' });
+    }
+    const result = await Item.deleteMany({ _id: { $in: ids }, userId: req.userId });
+    res.json({ message: `Deleted ${result.deletedCount} item(s).` });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+});
+
+// ─── POST /api/items/import (Bulk import from CSV/Excel) ──────────────────────
+router.post('/import', auth, upload.single('file'), async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ message: 'No file uploaded' });
+    }
+
+    const buffer = req.file.buffer;
+    const filename = req.file.originalname.toLowerCase();
+    let rows = [];
+
+    if (filename.endsWith('.csv')) {
+      const csvString = buffer.toString('utf-8');
+      rows = await csvtojson().fromString(csvString);
+    } else if (filename.endsWith('.xlsx') || filename.endsWith('.xls')) {
+      const workbook = XLSX.read(buffer, { type: 'buffer' });
+      const sheetName = workbook.SheetNames[0];
+      const sheet = workbook.Sheets[sheetName];
+      rows = XLSX.utils.sheet_to_json(sheet);
+    } else {
+      return res.status(400).json({ message: 'Unsupported file format. Please upload CSV or Excel.' });
+    }
+
+    if (rows.length === 0) {
+      return res.status(400).json({ message: 'No data found in file' });
+    }
+
+    const imported = [];
+    const errors = [];
+
+    for (let i = 0; i < rows.length; i++) {
+      const row = rows[i];
+      try {
+        const name = row['Name'] || row['Item Name'] || row['name'] || '';
+        if (!name.trim()) {
+          errors.push({ row: i + 1, message: 'Name is required' });
+          continue;
+        }
+
+        const typeName = (row['Type'] || row['type'] || '').trim();
+        const providerName = (row['Provider'] || row['Vendor'] || row['provider'] || row['vendor'] || '').trim();
+        const companyName = (row['Company'] || row['company'] || '').trim();
+        const locationName = (row['Location'] || row['location'] || '').trim();
+        const startDateStr = (row['Start Date'] || row['StartDate'] || row['start date'] || row['startDate'] || '').trim();
+        const endDateStr = (row['End Date'] || row['EndDate'] || row['end date'] || row['endDate'] || '').trim();
+        const costStr = (row['Cost'] || row['cost'] || '').trim();
+        const notes = (row['Notes'] || row['notes'] || '').trim();
+        const remindersStr = (row['Reminders'] || row['reminders'] || '').trim();
+
+        const startDate = new Date(startDateStr);
+        const endDate = new Date(endDateStr);
+        if (!startDateStr || !endDateStr || isNaN(startDate) || isNaN(endDate)) {
+          errors.push({ row: i + 1, message: 'Valid start and end dates are required' });
+          continue;
+        }
+
+        // Helper to find or create related documents
+        const findOrCreate = async (Model, name) => {
+          if (!name) return null;
+          let doc = await Model.findOne({ userId: req.userId, name: { $regex: new RegExp(`^${name}$`, 'i') } });
+          if (!doc) {
+            doc = new Model({ userId: req.userId, name });
+            await doc.save();
+          }
+          return doc._id;
+        };
+
+        const typeId = await findOrCreate(require('../models/Type'), typeName);
+        const providerId = await findOrCreate(require('../models/Vendor'), providerName);
+        const companyId = await findOrCreate(require('../models/Company'), companyName);
+        const locationId = await findOrCreate(require('../models/Location'), locationName);
+
+        let reminders = [];
+        if (remindersStr) {
+          reminders = remindersStr.split(',').map(s => {
+            const num = parseInt(s.trim(), 10);
+            return isNaN(num) ? null : { daysBefore: num, sent: false };
+          }).filter(r => r !== null);
+        } else {
+          reminders = [{ daysBefore: 30, sent: false }, { daysBefore: 15, sent: false }, { daysBefore: 7, sent: false }];
+        }
+
+        const item = new Item({
+          userId: req.userId,
+          name,
+          type: typeId,
+          provider: providerId,
+          company: companyId,
+          location: locationId,
+          startDate,
+          endDate,
+          cost: costStr ? parseFloat(costStr) : 0,
+          notes,
+          reminders,
+        });
+
+        await item.save();
+        const populated = await Item.findById(item._id).populate(populateFields);
+        imported.push(populated);
+      } catch (err) {
+        console.error(`Row ${i+1} error:`, err);
+        errors.push({ row: i + 1, message: err.message });
+      }
+    }
+
+    res.json({
+      message: `Imported ${imported.length} of ${rows.length} items`,
+      imported,
+      errors: errors.length > 0 ? errors : undefined,
+    });
+  } catch (err) {
+    console.error('Import error:', err);
+    res.status(500).json({ message: err.message });
+  }
+});
+
+// ─── POST /api/items/:id/test-reminder (Single test) ─────────────────────────
 router.post('/:id/test-reminder', auth, async (req, res) => {
   try {
     const item = await Item.findOne({ _id: req.params.id, userId: req.userId })
@@ -184,24 +315,20 @@ router.post('/:id/test-reminder', auth, async (req, res) => {
   }
 });
 
-// ─── POST /api/items/run-reminders ────────────────────────────────────────────
-// Called by external cron job (cron-job.org)
-// ✅ Responds immediately, processes in background to avoid timeout
+// ─── POST /api/items/run-reminders (External cron trigger) ───────────────────
 router.post('/run-reminders', async (req, res) => {
   if (req.body.secret !== process.env.CRON_SECRET) {
     return res.status(401).json({ message: 'Unauthorized' });
   }
 
-  // Respond immediately so cron job doesn't timeout
   res.json({ message: 'Reminder check started in background' });
 
-  // Run in background
   runReminderCheck().catch(err => {
     console.error('❌ Background reminder check failed:', err.message);
   });
 });
 
-// ─── POST /api/items/test-reminders (bulk test for dev) ───────────────────────
+// ─── POST /api/items/test-reminders (Bulk test for dev) ──────────────────────
 router.post('/test-reminders', auth, async (req, res) => {
   try {
     const today = new Date();
@@ -225,7 +352,7 @@ router.post('/test-reminders', auth, async (req, res) => {
           );
           reminder.sent = true;
           sent++;
-          break; // one reminder per item per run
+          break;
         }
       }
       await item.save();

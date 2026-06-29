@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import ReactDOM from 'react-dom';
 import toast from 'react-hot-toast';
 import API from '../services/api';
@@ -9,6 +9,17 @@ export default function ItemList({ items, onEdit, onRefresh }) {
   const { theme } = useTheme();
   const isDark = theme === 'dark';
   const [selectedItem, setSelectedItem] = useState(null);
+
+  // Close the detail modal on Escape key press
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      if (e.key === 'Escape' && selectedItem) {
+        setSelectedItem(null);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [selectedItem]);
 
   const handleDelete = async (id) => {
     if (!window.confirm('Are you sure you want to delete this item? This action cannot be undone.')) return;
@@ -82,16 +93,6 @@ export default function ItemList({ items, onEdit, onRefresh }) {
 
   const divideStyle = isDark ? 'divide-white/[0.04]' : 'divide-gray-100';
   const theadBg = isDark ? 'bg-white/[0.02]' : 'bg-gray-50/80';
-
-  // Handle test reminder sending
-  const handleTestReminder = async (item) => {
-    try {
-      const res = await API.post(`/items/${item._id}/test-reminder`);
-      toast.success(res.data.message);
-    } catch (err) {
-      toast.error(err.response?.data?.message || 'Failed to send test reminder');
-    }
-  };
 
   return (
     <div className="space-y-6">
@@ -278,7 +279,7 @@ export default function ItemList({ items, onEdit, onRefresh }) {
         )}
       </div>
 
-      {/* ═══ Detail Modal (Portal) ═══ */}
+      {/* ═══ Detail Modal (Portal) – closes on Escape or backdrop click ═══ */}
       {selectedItem &&
         ReactDOM.createPortal(
           <div 
@@ -359,17 +360,6 @@ export default function ItemList({ items, onEdit, onRefresh }) {
                     }`}
                   >
                     Edit Item
-                  </button>
-                  {/* Test Reminder */}
-                  <button 
-                    onClick={() => handleTestReminder(selectedItem)} 
-                    className={`flex-1 py-3 rounded-xl font-semibold text-sm transition-all cursor-pointer border ${
-                      isDark 
-                        ? 'border-teal-500/30 text-teal-400 hover:bg-teal-500/10' 
-                        : 'border-blue-200 text-blue-600 hover:bg-blue-50'
-                    }`}
-                  >
-                    🧪 Test Reminder
                   </button>
                   {/* Close */}
                   <button 

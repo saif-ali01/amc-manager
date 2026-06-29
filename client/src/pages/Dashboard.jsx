@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import API from '../services/api';
 import ItemForm from '../components/ItemForm';
 import ItemList from '../components/ItemList';
+import ImportModal from '../components/ImportModal';          // ← NEW
 import { useTheme } from '../context/ThemeContext';
 import * as XLSX from 'xlsx';          // Excel
 import { saveAs } from 'file-saver';  // CSV download
@@ -123,6 +124,7 @@ export default function Dashboard() {
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [modalOpen, setModalOpen] = useState(false);
   const [dismissedWarning, setDismissedWarning] = useState(false);
+  const [importModalOpen, setImportModalOpen] = useState(false);   // ← NEW
 
   const searchRef = useRef(null);
 
@@ -407,6 +409,22 @@ export default function Dashboard() {
                   <span>Excel</span>
                 </button>
               </div>
+
+              {/* ── IMPORT BUTTON ── */}
+              <button
+                onClick={() => setImportModalOpen(true)}
+                className={`h-9 px-3 flex items-center gap-1 text-[13px] border rounded-xl transition-all cursor-pointer ${
+                  isDark
+                    ? 'text-gray-400 hover:text-white bg-white/[0.04] hover:bg-white/[0.08] border-white/[0.06]'
+                    : 'text-gray-500 hover:text-gray-900 bg-gray-100 hover:bg-gray-200 border-gray-200'
+                }`}
+                title="Import from CSV/Excel"
+              >
+                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
+                </svg>
+                <span className="hidden sm:inline">Import</span>
+              </button>
 
               <button
                 onClick={handleAdd}
@@ -821,7 +839,7 @@ export default function Dashboard() {
       </div>
 
       {/* ═══════════════════════════════════════
-         MODAL
+         MODAL (Add / Edit Item)
          ═══════════════════════════════════════ */}
       {showForm && (
         <div
@@ -839,13 +857,11 @@ export default function Dashboard() {
                 : 'bg-white border-gray-200 shadow-gray-200/50'
             }`}
           >
-            {/* Modal ambient glow */}
             <div className={`absolute -top-20 left-1/2 -translate-x-1/2 w-56 h-56 rounded-full blur-[80px] pointer-events-none transition-colors duration-500 ${
               isDark ? 'bg-teal-500/[0.08]' : 'bg-blue-500/[0.06]'
             }`} />
 
             <div className="relative p-6 sm:p-8">
-              {/* Modal Header */}
               <div className="flex items-start justify-between mb-6">
                 <div>
                   <h2 className={`text-lg font-bold transition-colors duration-500 ${
@@ -876,6 +892,15 @@ export default function Dashboard() {
           </div>
         </div>
       )}
+
+      {/* ═══════════════════════════════════════
+         IMPORT MODAL
+         ═══════════════════════════════════════ */}
+      <ImportModal
+        isOpen={importModalOpen}
+        onClose={() => setImportModalOpen(false)}
+        onImportDone={fetchItems}
+      />
     </div>
   );
 }

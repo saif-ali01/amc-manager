@@ -1,36 +1,71 @@
-const Brevo = require('@getbrevo/brevo');
-
-const client = Brevo.ApiClient.instance;
-client.authentications['api-key'].apiKey = process.env.BREVO_API_KEY;
-
-const transactionalApi = new Brevo.TransactionalEmailsApi();
+const https = require('https');
 
 /**
- * Send an email via Brevo HTTP API
- * Works on Render free tier (uses HTTPS not SMTP)
- * @param {string|string[]} to - recipient email(s)
+ * Send email via Brevo HTTP API
+ * - No SMTP (works on Render free tier)
+ * - No domain verification needed (sender email verified instead)
+ * - No extra npm packages needed
+ * @param {string|string[]} to
  * @param {string} subject
  * @param {string} html
  */
 module.exports = async (to, subject, html) => {
-  try {
-    const recipients = Array.isArray(to) ? to : [to];
+  const recipients = Array.isArray(to) ? to : [to];
 
-    const sendSmtpEmail = new Brevo.SendSmtpEmail();
+  if (!process.env.BREVO_API_KEY) {
+    console.error('❌ BREVO_API_KEY is not set in environment variables!');
+    throw new Error('BREVO_API_KEY missing');
+  }
 
-    sendSmtpEmail.sender = {
+  const payload = JSON.stringify({
+    sender: {
       name: 'AMC Manager',
-      email: 'noreply@nutraj.com', // ✅ must be verified in Brevo
+      email: 'saifali01x@gmail.com', // ✅ verified sender in Brevo (no domain needed)
+    },
+    to: recipients.map(email => ({ email })),
+    subject,
+    htmlContent: html,
+  });
+
+  return new Promise((resolve, reject) => {
+    const options = {
+      hostname: 'api.brevo.com',
+      path: '/v3/smtp/email',
+      method: 'POST',
+      headers: {
+        'accept': 'application/json',
+        'api-key': process.env.BREVO_API_KEY,
+        'content-type': 'application/json',
+        'content-length': Buffer.byteLength(payload),
+      },
     };
 
-    sendSmtpEmail.to = recipients.map(email => ({ email }));
-    sendSmtpEmail.subject = subject;
-    sendSmtpEmail.htmlContent = html;
+    const req = https.request(options, (res) => {
+      let data = '';
+      res.on('data', chunk => data += chunk);
+      res.on('end', () => {
+        try {
+          const parsed = JSON.parse(data);
+          if (res.statusCode >= 200 && res.statusCode < 300) {
+            console.log(`✅ Email sent to ${recipients.join(', ')} | MessageID: ${parsed.messageId}`);
+            resolve(parsed);
+          } else {
+            console.error(`❌ Brevo API error [${res.statusCode}]:`, JSON.stringify(parsed));
+            reject(new Error(`Brevo error ${res.statusCode}: ${parsed.message || data}`));
+          }
+        } catch (parseErr) {
+          console.error('❌ Failed to parse Brevo response:', data);
+          reject(parseErr);
+        }
+      });
+    });
 
-    const result = await transactionalApi.sendTransacEmail(sendSmtpEmail);
-    console.log(`✅ Email sent to ${recipients.join(', ')} | MessageID: ${result?.messageId}`);
-  } catch (err) {
-    console.error(`❌ Brevo failed to send to ${to}:`, err?.response?.body || err.message);
-    throw err;
-  }
+    req.on('error', (err) => {
+      console.error(`❌ Brevo HTTPS request failed:`, err.message);
+      reject(err);
+    });
+
+    req.write(payload);
+    req.end();
+  });
 };
