@@ -1,39 +1,36 @@
-const nodemailer = require('nodemailer');
+const Brevo = require('@getbrevo/brevo');
 
-const transporter = nodemailer.createTransport({
-  service: 'gmail',
-  auth: {
-    user: process.env.GMAIL_USER,  // e.g. ali786saif0@gmail.com
-    pass: process.env.GMAIL_PASS,  // 16-char App Password (no spaces)
-  },
-});
+const client = Brevo.ApiClient.instance;
+client.authentications['api-key'].apiKey = process.env.BREVO_API_KEY;
 
-// Verify connection on startup
-transporter.verify((err, success) => {
-  if (err) {
-    console.error('❌ Gmail transporter error:', err.message);
-  } else {
-    console.log('✅ Gmail transporter ready');
-  }
-});
+const transactionalApi = new Brevo.TransactionalEmailsApi();
 
 /**
- * Send an email
- * @param {string|string[]} to - recipient(s)
+ * Send an email via Brevo HTTP API
+ * Works on Render free tier (uses HTTPS not SMTP)
+ * @param {string|string[]} to - recipient email(s)
  * @param {string} subject
  * @param {string} html
  */
 module.exports = async (to, subject, html) => {
   try {
-    const info = await transporter.sendMail({
-      from: `"AMC Manager" <${process.env.GMAIL_USER}>`,
-      to: Array.isArray(to) ? to.join(', ') : to,
-      subject,
-      html,
-    });
-    console.log(`✅ Email sent to ${to} | ID: ${info.messageId}`);
+    const recipients = Array.isArray(to) ? to : [to];
+
+    const sendSmtpEmail = new Brevo.SendSmtpEmail();
+
+    sendSmtpEmail.sender = {
+      name: 'AMC Manager',
+      email: 'noreply@nutraj.com', // ✅ must be verified in Brevo
+    };
+
+    sendSmtpEmail.to = recipients.map(email => ({ email }));
+    sendSmtpEmail.subject = subject;
+    sendSmtpEmail.htmlContent = html;
+
+    const result = await transactionalApi.sendTransacEmail(sendSmtpEmail);
+    console.log(`✅ Email sent to ${recipients.join(', ')} | MessageID: ${result?.messageId}`);
   } catch (err) {
-    console.error(`❌ Failed to send email to ${to}:`, err.message);
+    console.error(`❌ Brevo failed to send to ${to}:`, err?.response?.body || err.message);
     throw err;
   }
 };
