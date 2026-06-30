@@ -44,7 +44,7 @@ export default function ImportModal({ isOpen, onClose, onImportDone }) {
     }
   };
 
-  // ─── Generate and download a sample CSV ─────────────────────
+  // ─── Generate and download a sample CSV (updated with Billing Type) ──
   const downloadSampleCSV = () => {
     const headers = [
       'Name',
@@ -54,12 +54,12 @@ export default function ImportModal({ isOpen, onClose, onImportDone }) {
       'Location',
       'Start Date',
       'End Date',
+      'Billing Type',    // NEW
       'Cost',
       'Notes',
       'Reminders'
     ];
 
-    // Example row (optional – you can include one or just headers)
     const exampleRow = [
       'Example License',
       'License',
@@ -68,6 +68,7 @@ export default function ImportModal({ isOpen, onClose, onImportDone }) {
       'Delhi',
       '2026-07-01',
       '2027-06-30',
+      'prepaid',         // or 'postpaid'
       '15000',
       'Sample notes',
       '30,15,7,1'
@@ -101,7 +102,7 @@ export default function ImportModal({ isOpen, onClose, onImportDone }) {
         <h2 className={`text-lg font-bold mb-4 ${isDark ? 'text-white' : 'text-gray-900'}`}>Import Items</h2>
         <p className={`text-sm mb-4 ${isDark ? 'text-gray-400' : 'text-gray-500'}`}>
           Upload a CSV or Excel file. The file must include headers like:
-          <br/><strong>Name, Type, Provider, Company, Location, Start Date, End Date, Cost, Notes, Reminders</strong>
+          <br/><strong>Name, Type, Provider, Company, Location, Start Date, End Date, Billing Type, Cost, Notes, Reminders</strong>
         </p>
 
         {/* File input */}

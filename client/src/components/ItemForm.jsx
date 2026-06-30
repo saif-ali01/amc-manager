@@ -182,6 +182,15 @@ function useStyles() {
     inputIcon: `absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 pointer-events-none transition-colors duration-500 ${
       isDark ? 'text-gray-500' : 'text-gray-400'
     }`,
+    // ── New: segmented toggle for Billing Type (Prepaid / Postpaid) ──
+    toggleWrap: `flex rounded-xl p-1 transition-colors duration-500 ${
+      isDark ? 'bg-white/[0.04] border border-white/[0.08]' : 'bg-gray-100 border border-gray-200'
+    }`,
+    toggleBtn: (active) => `flex-1 py-2 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+      active
+        ? (isDark ? 'bg-teal-500 text-zinc-950 shadow shadow-teal-500/20' : 'bg-blue-600 text-white shadow shadow-blue-600/20')
+        : (isDark ? 'text-gray-400 hover:text-white' : 'text-gray-500 hover:text-gray-800')
+    }`,
   };
 }
 
@@ -245,25 +254,23 @@ function SelectField({ label, name, value, options, onChange, onAdd, required, s
 export default function ItemForm({ existingItem, onSave, onCancel }) {
   const s = useStyles();
 
-  // ✅ Helper to safely extract the ID from a possibly populated field
   const getFieldId = (field) => {
     if (!existingItem) return '';
     const data = existingItem[field];
     if (!data) return '';
-    // populated object (most common)
     if (typeof data === 'object' && data._id) return data._id;
-    // plain string (fallback for old / unpopulated data)
     if (typeof data === 'string') return data;
     return '';
   };
 
-  // ✅ Form state – now uses correct IDs
+  // ✅ Form state – billingType added, reminders no longer hard-coded
   const [form, setForm] = useState({
     name: existingItem?.name || '',
     type: getFieldId('type'),
     provider: getFieldId('provider'),
     company: getFieldId('company'),
     location: getFieldId('location'),
+    billingType: existingItem?.billingType || 'prepaid',
     startDate: existingItem?.startDate
       ? new Date(existingItem.startDate).toISOString().split('T')[0]
       : '',
@@ -272,7 +279,9 @@ export default function ItemForm({ existingItem, onSave, onCancel }) {
       : '',
     cost: existingItem?.cost || '',
     notes: existingItem?.notes || '',
-    reminders: existingItem?.reminders?.map((r) => r.daysBefore) || [30, 15, 7],
+    // No manufactured [30, 15, 7] default – starts empty unless editing
+    // an item that already has reminders set.
+    reminders: existingItem?.reminders?.map((r) => r.daysBefore) || [],
   });
 
   const [userTypes, setUserTypes] = useState([]);
@@ -405,7 +414,28 @@ export default function ItemForm({ existingItem, onSave, onCancel }) {
         />
       </div>
 
-      <Divider label="Schedule & Cost" s={s} />
+      <Divider label="Billing & Schedule" s={s} />
+
+      {/* ── New: Billing Type toggle (Prepaid / Postpaid) ── */}
+      <div>
+        <label className={s.label}>Billing Type</label>
+        <div className={s.toggleWrap}>
+          <button
+            type="button"
+            onClick={() => setForm({ ...form, billingType: 'prepaid' })}
+            className={s.toggleBtn(form.billingType === 'prepaid')}
+          >
+            Prepaid
+          </button>
+          <button
+            type="button"
+            onClick={() => setForm({ ...form, billingType: 'postpaid' })}
+            className={s.toggleBtn(form.billingType === 'postpaid')}
+          >
+            Postpaid
+          </button>
+        </div>
+      </div>
 
       <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
         <div>
@@ -459,6 +489,12 @@ export default function ItemForm({ existingItem, onSave, onCancel }) {
           <label className={s.label} style={{ marginBottom: 0 }}>Reminders</label>
           <span className={s.subLabel}>days before expiry</span>
         </div>
+
+        {form.reminders.length === 0 && (
+          <p className={`text-xs mb-2 ${s.isDark ? 'text-gray-500' : 'text-gray-400'}`}>
+            No reminders added yet.
+          </p>
+        )}
 
         <div className="space-y-2">
           {form.reminders.map((r, i) => (

@@ -21,14 +21,19 @@ const itemSchema = new mongoose.Schema({
     required: true
   },
   type: {
-    type: mongoose.Schema.Types.ObjectId,   // ← now ObjectId
-    ref: 'Type',                            // ← reference
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Type',
     required: true
   },
   provider: {
-    type: mongoose.Schema.Types.ObjectId,   // ← now ObjectId
-    ref: 'Vendor',                          // ← reference
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Vendor',
     default: null
+  },
+  billingType: {
+    type: String,
+    enum: ['prepaid', 'postpaid'],
+    default: 'prepaid'
   },
   startDate: {
     type: Date,
