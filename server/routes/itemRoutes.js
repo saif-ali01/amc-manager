@@ -106,7 +106,7 @@ router.post('/', auth, async (req, res) => {
   }
 });
 
-// ─── GET /api/items ────────────────────────────────────────────────────
+// ─── GET /api/items (List all for user) ──────────────────────────────
 router.get('/', auth, async (req, res) => {
   try {
     const items = await Item.find({ userId: req.userId })
@@ -126,7 +126,7 @@ router.get('/', auth, async (req, res) => {
   }
 });
 
-// ─── DELETE /api/items/bulk ───────────────────────────────────────────
+// ─── DELETE /api/items/bulk (Bulk delete) ────────────────────────────
 router.delete('/bulk', auth, async (req, res) => {
   try {
     const { ids } = req.body;
@@ -140,7 +140,7 @@ router.delete('/bulk', auth, async (req, res) => {
   }
 });
 
-// ─── PUT /api/items/:id ──────────────────────────────────────────────
+// ─── PUT /api/items/:id (Update) ──────────────────────────────────────
 router.put('/:id', auth, async (req, res) => {
   try {
     if (req.body.endDate) {
@@ -170,7 +170,7 @@ router.put('/:id', auth, async (req, res) => {
   }
 });
 
-// ─── DELETE /api/items/:id ──────────────────────────────────────────
+// ─── DELETE /api/items/:id (Single delete) ────────────────────────────
 router.delete('/:id', auth, async (req, res) => {
   try {
     const item = await Item.findOneAndDelete({ _id: req.params.id, userId: req.userId });
@@ -181,7 +181,7 @@ router.delete('/:id', auth, async (req, res) => {
   }
 });
 
-// ─── POST /api/items/import ──────────────────────────────────────────
+// ─── POST /api/items/import (Bulk import from CSV/Excel) ──────────────
 router.post('/import', auth, upload.single('file'), async (req, res) => {
   try {
     if (!req.file) {
@@ -387,19 +387,126 @@ router.post('/import', auth, upload.single('file'), async (req, res) => {
   }
 });
 
-// ─── POST /api/items/:id/test-reminder ──────────────────────────────
+// ─── POST /api/items/:id/test-reminder (Single test) ──────────────────
 router.post('/:id/test-reminder', auth, async (req, res) => {
-  // ... unchanged, keep as is ...
+  try {
+    const item = await Item.findOne({ _id: req.params.id, userId: req.userId })
+      .populate('userId', 'email name')
+      .populate('type', 'name')
+      .populate('provider', 'name')
+      .populate('company', 'name')
+      .populate('location', 'name');
+
+    if (!item) return res.status(404).json({ message: 'Item not found' });
+    if (!item.userId?.email) return res.status(400).json({ message: 'Item owner email not found' });
+
+    const end = new Date(item.endDate);
+    const diffDays = Math.ceil((end - new Date()) / (1000 * 60 * 60 * 24));
+    const statusColor = diffDays <= 0 ? '#e11d48' : diffDays <= 7 ? '#f59e0b' : '#10b981';
+    const statusText = diffDays <= 0 ? 'Expired' : `${diffDays} day${diffDays !== 1 ? 's' : ''} remaining`;
+
+    const extraEmails = await NotificationEmail.find({ userId: req.userId });
+    const allRecipients = [item.userId.email, ...extraEmails.map(e => e.email)].filter(Boolean);
+
+    const subject = `🔔 Test Reminder – ${item.name}`;
+    const html = `
+      <!DOCTYPE html>
+      <html>
+      <body style="margin:0;padding:20px;background:#f3f4f6;font-family:Arial,Helvetica,sans-serif;">
+        <div style="max-width:600px;margin:0 auto;background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,0.08);">
+          <div style="background:linear-gradient(135deg,#4f46e5,#7c3aed);padding:24px 32px;text-align:center;">
+            <h1 style="color:#fff;margin:0;font-size:20px;">🔔 AMC Manager</h1>
+            <p style="color:#c7d2fe;margin:6px 0 0;font-size:13px;">Test Reminder</p>
+          </div>
+          <div style="padding:32px;">
+            <p style="font-size:15px;color:#1f2937;">Hi <strong>${item.userId.name}</strong>,</p>
+            <p style="font-size:14px;color:#4b5563;">This is a <strong>manual test</strong> of your AMC Manager alert system.</p>
+            <div style="background:#f9fafb;border:1px solid #e5e7eb;border-radius:8px;padding:20px;margin:20px 0;">
+              <table style="width:100%;font-size:14px;border-collapse:collapse;">
+                <tr><td style="padding:6px 0;color:#6b7280;width:120px;">Item</td><td style="padding:6px 0;color:#111827;font-weight:bold;">${item.name}</td></tr>
+                <tr><td style="padding:6px 0;color:#6b7280;">Type</td><td style="padding:6px 0;color:#374151;">${item.type?.name || '—'}</td></tr>
+                <tr><td style="padding:6px 0;color:#6b7280;">Provider</td><td style="padding:6px 0;color:#374151;">${item.provider?.name || '—'}</td></tr>
+                <tr><td style="padding:6px 0;color:#6b7280;">Company</td><td style="padding:6px 0;color:#374151;">${item.company?.name || '—'}</td></tr>
+                <tr><td style="padding:6px 0;color:#6b7280;">Location</td><td style="padding:6px 0;color:#374151;">${item.location?.name || '—'}</td></tr>
+                <tr><td style="padding:6px 0;color:#6b7280;">Expires</td><td style="padding:6px 0;color:#374151;">${end.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}</td></tr>
+                <tr><td style="padding:6px 0;color:#6b7280;">Status</td><td style="padding:6px 0;font-weight:bold;color:${statusColor};">${statusText}</td></tr>
+              </table>
+            </div>
+            <div style="text-align:center;margin-top:24px;">
+              <a href="${process.env.FRONTEND_URL || 'https://amc-manager.onrender.com'}"
+                 style="background:#4f46e5;color:#fff;padding:11px 26px;border-radius:8px;text-decoration:none;font-size:14px;font-weight:bold;">
+                Open AMC Manager →
+              </a>
+            </div>
+          </div>
+          <div style="background:#f9fafb;padding:14px 32px;text-align:center;border-top:1px solid #e5e7eb;">
+            <p style="font-size:11px;color:#9ca3af;margin:0;">Automated test email from AMC Manager. Do not reply.</p>
+          </div>
+        </div>
+      </body>
+      </html>`;
+
+    for (const to of allRecipients) {
+      await sendEmail(to, subject, html);
+    }
+
+    res.json({
+      message: `Test reminder sent to ${allRecipients.length} recipient(s)`,
+      recipients: allRecipients,
+    });
+  } catch (err) {
+    console.error('Test reminder error:', err);
+    res.status(500).json({ message: err.message });
+  }
 });
 
-// ─── POST /api/items/run-reminders ──────────────────────────────────
+// ─── POST /api/items/run-reminders (External cron trigger) ────────────
 router.post('/run-reminders', async (req, res) => {
-  // ... unchanged, keep as is ...
+  if (req.body.secret !== process.env.CRON_SECRET) {
+    return res.status(401).json({ message: 'Unauthorized' });
+  }
+
+  res.json({ message: 'Reminder check started in background' });
+
+  runReminderCheck().catch(err => {
+    console.error('❌ Background reminder check failed:', err.message);
+  });
 });
 
-// ─── POST /api/items/test-reminders ──────────────────────────────────
+// ─── POST /api/items/test-reminders (Bulk test for dev) ──────────────
 router.post('/test-reminders', auth, async (req, res) => {
-  // ... unchanged, keep as is ...
+  try {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    const items = await Item.find({ userId: req.userId, 'reminders.sent': false })
+      .populate('userId', 'email name');
+
+    let sent = 0;
+    for (const item of items) {
+      const end = new Date(item.endDate);
+      end.setHours(0, 0, 0, 0);
+      const diffDays = Math.ceil((end - today) / (1000 * 60 * 60 * 24));
+
+      for (const reminder of item.reminders) {
+        if (!reminder.sent && diffDays <= reminder.daysBefore) {
+          await sendEmail(
+            item.userId.email,
+            `Reminder: ${item.name}`,
+            `<p><strong>${item.name}</strong> expires in <strong>${diffDays}</strong> days.</p>`
+          );
+          reminder.sent = true;
+          sent++;
+          break;
+        }
+      }
+      await item.save();
+    }
+
+    res.json({ message: `Sent ${sent} reminder(s)` });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
 });
 
 module.exports = router;
