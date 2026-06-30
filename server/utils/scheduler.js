@@ -166,7 +166,7 @@ const runReminderCheck = async () => {
                 </table>
               </div>
               <div style="text-align:center;margin:28px 0 8px;">
-                <a href="${process.env.FRONTEND_URL || 'https://amc-manager.onrender.com'}"
+                <a href= 'https://amc-manager-self.vercel.app/' target="_blank" rel="noopener noreferrer"
                    style="background:#4f46e5;color:#ffffff;padding:12px 28px;border-radius:8px;text-decoration:none;font-size:14px;font-weight:bold;display:inline-block;">
                   Open AMC Manager →
                 </a>
